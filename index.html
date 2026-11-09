@@ -37,7 +37,7 @@ if(SUPABASE_URL.startsWith('PASTE')){document.getElementById('v').textContent='T
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 const $v=document.getElementById('v'),BK='files',MAXB=50*1048576;
 const h=(t,a,...k)=>{const e=document.createElement(t);for(const x in a||{}){x in e?e[x]=a[x]:e.setAttribute(x,a[x])}e.append(...k.flat().filter(v=>v!=null&&v!==false));return e};
-let me=null,P={},err='';
+let me=null,P={},err='',canPost=false,canWork=true;
 const nm=id=>(P[id]&&P[id].name)||'A member';
 const q=async p=>{const {data,error}=await p;if(error)throw error;return data};
 const when=s=>new Date(s).toLocaleString();
@@ -69,14 +69,15 @@ async function route(){
   if(!me)return loginView();
   try{
     P=Object.fromEntries((await q(sb.from('profiles').select('*'))).map(p=>[p.id,p]));
-    const hs=location.hash;$v.replaceChildren(h('p',{className:'note'},'Signed in as '+nm(me.id)+' · ',h('a',{href:'#',onclick:async e=>{e.preventDefault();await sb.auth.signOut()}},'Sign out')));
-    $v.append(hs==='#new'?newView():hs.startsWith('#task-')?await taskView(hs.slice(6)):await listView());
+    const role=(P[me.id]||{}).role||'worker';canPost=role!=='worker';canWork=role!=='poster';
+    const hs=location.hash;$v.replaceChildren(h('p',{className:'note'},'Signed in as '+nm(me.id)+' ('+({poster:'poster',worker:'worker',both:'poster and worker'}[role]||'worker')+') · ',h('a',{href:'#',onclick:async e=>{e.preventDefault();await sb.auth.signOut()}},'Sign out')));
+    $v.append(hs==='#new'&&canPost?newView():hs.startsWith('#task-')?await taskView(hs.slice(6)):await listView());
   }catch(e){err=e.message||'Could not load.'}
   if(err)$v.prepend(h('p',{className:'err'},err));
 }
 async function listView(){
   const ts=await q(sb.from('tasks').select('*').order('created_at',{ascending:false})),cs=await q(sb.from('claims').select('task_id'));
-  return h('div',{},h('a',{href:'#new'},h('button',{className:'btn'},'+ Post a task')),
+  return h('div',{},canPost?h('a',{href:'#new'},h('button',{className:'btn'},'+ Post a task')):h('p',{className:'note'},'You are a worker. Pick a task below and take the job.'),
     ts.length?ts.map(t=>{const n=cs.filter(c=>c.task_id===t.id).length;
       return h('a',{href:'#task-'+t.id,style:'text-decoration:none;color:inherit;display:block'},h('div',{className:'card'},h('h2',{},t.title),
         h('span',{className:'badge'},t.status==='closed'?'Closed':n?'In progress ('+n+')':'Open'),t.poster_id===me.id?h('span',{className:'badge'},' Yours'):null,
@@ -113,7 +114,8 @@ async function taskView(id){
   }else{
     const acc=subs.filter(s=>s.status==='accepted'&&s.worker_id!==me.id);
     if(acc.length){out.append(h('h2',{},'Accepted work'));acc.forEach(s=>out.append(card(s)))}
-    if(!closed){
+    if(!closed&&!canWork)out.append(h('p',{className:'note'},'Only workers can take jobs.'));
+    if(!closed&&canWork){
       if(!mine){const b=h('button',{className:'btn'},'Take this job');b.onclick=()=>act(b,()=>q(sb.from('claims').insert({task_id:id})));out.append(b)}
       else{const f=h('input',{type:'file'}),n=h('textarea',{rows:2,placeholder:'Note for the poster (optional)'}),p=h('input',{type:'text',placeholder:'Where to send the bounty (PayPal email, wallet…)'}),b=h('button',{className:'btn'},'Send my work');
         b.onclick=()=>act(b,async()=>{const u=await upload(f.files[0],true);const r=(await q(sb.from('submissions').insert({task_id:id,file_path:u.path,file_type:u.type,note:n.value.trim()||null}).select()))[0];
