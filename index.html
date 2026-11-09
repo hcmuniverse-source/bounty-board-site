@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Bounty Board</title>
+<style>
+:root{--paper:#f1e6cc;--card:#f8f0dc;--ink:#3b2a1a;--rule:#8a6d3b;--accent:#7a2e1d;--ok:#2f5d2f;--bad:#8a2b2b;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#2a2118;--card:#352a1e;--ink:#eadcc0;--rule:#a98a52;--accent:#e0a07f;--ok:#8fc48f;--bad:#e08a8a;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#2a2118;--card:#352a1e;--ink:#eadcc0;--rule:#a98a52;--accent:#e0a07f;--ok:#8fc48f;--bad:#e08a8a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.5 Georgia,"Times New Roman",serif}
+body{padding:12px}
+#app{max-width:860px;margin:0 auto;border:3px double var(--rule);padding:14px 16px 28px;background:var(--paper)}
+h1{font-variant:small-caps;letter-spacing:.06em;text-align:center;margin:.2em 0;font-size:1.7rem}
+.sub{text-align:center;font-style:italic;margin:0 0 .8em;border-bottom:1px solid var(--rule);padding-bottom:.6em}
+h2{font-size:1.25rem;margin:.2em 0}
+.card{background:var(--card);border:1px solid var(--rule);padding:12px;margin:12px 0}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+.btn{font:inherit;background:var(--accent);color:var(--paper);border:1px solid var(--ink);padding:8px 14px;cursor:pointer;min-height:40px}
+.btn.alt{background:transparent;color:var(--ink)}
+.btn:disabled{opacity:.5}
+input,select,textarea{font:inherit;width:100%;padding:8px;border:1px solid var(--rule);background:var(--paper);color:var(--ink);margin:4px 0 10px}
+input[type=file]{padding:6px}
+label{font-variant:small-caps;letter-spacing:.04em}
+img.ph{max-width:100%;height:auto;display:block;border:6px solid #fff;box-shadow:0 2px 8px #0005;background:#ccc}
+.thumb{width:140px;flex:none}
+.badge{display:inline-block;border:1px solid var(--rule);padding:0 8px;font-size:.85rem;font-variant:small-caps}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+.note{font-size:.9rem;font-style:italic}
+a{color:var(--accent)}
+.bounty{border:2px dashed var(--accent);padding:8px 12px;margin:10px 0}
+.err{color:var(--bad);min-height:1.2em}
+</style><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script></head><body>
+<div id="app"><h1>The Bounty Board</h1><p class="sub">Post a task, name your price, choose the best work</p><div id="v">Loading…</div></div>
+<script>
+if(SUPABASE_URL.startsWith('PASTE')){document.getElementById('v').textContent='The Bounty Board is almost ready. The owner still needs to connect it to the database (config.js).';throw new Error('not configured')}
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const $v=document.getElementById('v'),BK='files',MAXB=50*1048576;
+const h=(t,a,...k)=>{const e=document.createElement(t);for(const x in a||{}){x in e?e[x]=a[x]:e.setAttribute(x,a[x])}e.append(...k.flat().filter(v=>v!=null&&v!==false));return e};
+let me=null,P={},err='';
+const nm=id=>(P[id]&&P[id].name)||'A member';
+const q=async p=>{const {data,error}=await p;if(error)throw error;return data};
+const when=s=>new Date(s).toLocaleString();
+function media(path,ct,alt){
+  const box=h('div',{},h('span',{className:'note'},'Loading…'));
+  sb.storage.from(BK).createSignedUrl(path,3600).then(({data})=>{box.replaceChildren();const u=data&&data.signedUrl;
+    if(!u){box.textContent='File unavailable.';return}
+    if((ct||'').startsWith('image/'))box.append(h('a',{href:u,target:'_blank',rel:'noopener'},h('img',{className:'ph',src:u,loading:'lazy',decoding:'async',alt:alt||''})),h('div',{className:'note'},'Tap to open full size.'));
+    else box.append(h('a',{href:u,target:'_blank',rel:'noopener'},'Open the file'))});
+  return box;
+}
+async function upload(f,req){
+  if(!f){if(req)throw Error('Please choose a file first.');return null}
+  if(f.size>MAXB)throw Error('That file is over 50 MB.');
+  const p=me.id+'/'+crypto.randomUUID()+'-'+f.name.replace(/[^\w.-]/g,'_');
+  await q(sb.storage.from(BK).upload(p,f,{contentType:f.type||'application/octet-stream'}));return{path:p,type:f.type};
+}
+async function act(btn,fn,stay){const o=btn.textContent;btn.disabled=true;btn.textContent='Working…';
+  try{await fn();err=''}catch(e){err=(e&&e.message)||'Something went wrong.'}
+  btn.disabled=false;btn.textContent=o;route()}
+function loginView(){
+  const em=h('input',{type:'text',placeholder:'Email',autocomplete:'username'}),pw=h('input',{type:'password',placeholder:'Password',autocomplete:'current-password'});
+  const b=h('button',{className:'btn'},'Sign in');
+  const go=()=>act(b,async()=>{await q(sb.auth.signInWithPassword({email:em.value.trim(),password:pw.value}))});
+  b.onclick=go;pw.onkeydown=e=>{if(e.key==='Enter')go()};
+  $v.replaceChildren(h('div',{className:'card'},h('h2',{},'Sign in'),h('p',{className:'note'},'Accounts are created by the board’s owner. Ask them for yours.'),em,pw,b),err?h('p',{className:'err'},err):null);
+}
+async function route(){
+  if(!me)return loginView();
+  try{
+    P=Object.fromEntries((await q(sb.from('profiles').select('*'))).map(p=>[p.id,p]));
+    const hs=location.hash;$v.replaceChildren(h('p',{className:'note'},'Signed in as '+nm(me.id)+' · ',h('a',{href:'#',onclick:async e=>{e.preventDefault();await sb.auth.signOut()}},'Sign out')));
+    $v.append(hs==='#new'?newView():hs.startsWith('#task-')?await taskView(hs.slice(6)):await listView());
+  }catch(e){err=e.message||'Could not load.'}
+  if(err)$v.prepend(h('p',{className:'err'},err));
+}
+async function listView(){
+  const ts=await q(sb.from('tasks').select('*').order('created_at',{ascending:false})),cs=await q(sb.from('claims').select('task_id'));
+  return h('div',{},h('a',{href:'#new'},h('button',{className:'btn'},'+ Post a task')),
+    ts.length?ts.map(t=>{const n=cs.filter(c=>c.task_id===t.id).length;
+      return h('a',{href:'#task-'+t.id,style:'text-decoration:none;color:inherit;display:block'},h('div',{className:'card'},h('h2',{},t.title),
+        h('span',{className:'badge'},t.status==='closed'?'Closed':n?'In progress ('+n+')':'Open'),t.poster_id===me.id?h('span',{className:'badge'},' Yours'):null,
+        t.bounty_amount?h('p',{},'Bounty: '+t.bounty_amount+' ('+t.bounty_method+')'):null,h('p',{className:'note'},'Posted by '+nm(t.poster_id))))}):h('p',{className:'card'},'No tasks yet.'));
+}
+function newView(){
+  const title=h('input',{type:'text',placeholder:'What needs doing?'}),file=h('input',{type:'file'}),want=h('textarea',{rows:4,placeholder:'Describe what you expect.'}),
+   amt=h('input',{type:'text',placeholder:'Optional, e.g. $20'}),meth=h('select',{},['PayPal','Stripe','Crypto','Other'].map(x=>h('option',{},x))),pn=h('input',{type:'text',placeholder:'How you will pay'});
+  const b=h('button',{className:'btn'},'Post this task');
+  b.onclick=()=>act(b,async()=>{if(!title.value.trim())throw Error('Please add a title.');const u=await upload(file.files[0],false);
+    await q(sb.from('tasks').insert({title:title.value.trim(),description:want.value.trim(),file_path:u&&u.path,file_type:u&&u.type,
+      bounty_amount:amt.value.trim()||null,bounty_method:amt.value.trim()?meth.value:null,bounty_note:pn.value.trim()||null}));location.hash=''});
+  return h('div',{className:'card'},h('h2',{},'New task'),h('label',{},'Title'),title,h('label',{},'Reference file (optional, up to 50 MB)'),file,h('label',{},'What I expect'),want,
+    h('label',{},'Bounty (optional)'),amt,h('label',{},'Pay by'),meth,h('label',{},'Payment note'),pn,h('div',{className:'row'},b,h('a',{href:'#'},h('button',{className:'btn alt'},'Cancel'))));
+}
+async function taskView(id){
+  const t=(await q(sb.from('tasks').select('*').eq('id',id)))[0];if(!t)return h('p',{},'Task not found. ',h('a',{href:'#'},'Back'));
+  const cls=await q(sb.from('claims').select('*').eq('task_id',id)),subs=await q(sb.from('submissions').select('*').eq('task_id',id).order('created_at',{ascending:false}));
+  const pays=subs.length?await q(sb.from('payouts').select('*').in('submission_id',subs.map(s=>s.id))):[];
+  const poster=t.poster_id===me.id,closed=t.status==='closed',mine=cls.some(c=>c.worker_id===me.id);
+  const out=h('div',{},h('p',{},h('a',{href:'#'},'← All tasks')),h('h2',{},t.title),h('span',{className:'badge'},closed?'Closed':'Open'),h('p',{className:'note'},'Posted by '+nm(t.poster_id)));
+  out.append(h('div',{className:'card'},t.file_path?media(t.file_path,t.file_type,t.title):null,h('p',{},h('b',{},'What is wanted: '),t.description||'No notes.'),
+    t.bounty_amount?h('div',{className:'bounty'},h('b',{},'Bounty: '+t.bounty_amount+' by '+t.bounty_method),t.bounty_note?h('div',{},t.bounty_note):null,h('div',{className:'note'},'Paid directly by the poster. This site does not move money.')):null));
+  if(closed){const w=subs.find(s=>s.id===t.winner_sub),py=w&&pays.find(p=>p.submission_id===w.id);
+    out.append(h('div',{className:'card'},h('b',{className:'ok'},'Closed. Winner: '+nm(t.winner_id)),poster&&py?h('p',{},'Pay to: '+py.details):null,
+      poster?(()=>{const r=h('button',{className:'btn alt'},'Reopen');r.onclick=()=>act(r,()=>q(sb.rpc('reopen_task',{tid:id})));return r})():null))}
+  const card=(s,ctrl)=>h('div',{className:'card'},h('b',{},nm(s.worker_id)+(s.status==='accepted'?' · '+s.rating+'/10':'')),h('span',{className:'note'},' · '+when(s.created_at)),media(s.file_path,s.file_type,'Work'),s.note?h('p',{},s.note):null,ctrl);
+  if(poster){
+    out.append(h('h2',{},'Submissions ('+subs.length+')'),h('p',{className:'note'},'Workers cannot see each other’s work. Once you accept one, it becomes visible to everyone.'));
+    subs.forEach(s=>{const sel=h('select',{},Array.from({length:11},(_,i)=>h('option',{value:i,selected:i===(s.rating??7)},i+' / 10'))),cm=h('input',{type:'text',placeholder:'Comment (optional)',value:s.comment||''});
+      const rate=v=>{const b=h('button',{className:'btn'+(v==='rejected'?' alt':'')},v==='accepted'?'Accept':'Reject');b.onclick=()=>act(b,()=>q(sb.rpc('review_submission',{sid:s.id,v,r:+sel.value,c:cm.value.trim()})));return b};
+      const w=s.status==='accepted'&&!closed?(()=>{const b=h('button',{className:'btn'},'Choose as winner and close');b.onclick=()=>act(b,()=>q(sb.rpc('close_task',{tid:id,sid:s.id})));return b})():null;
+      out.append(card(s,h('div',{},h('p',{},h('b',{className:s.status==='accepted'?'ok':s.status==='rejected'?'bad':''},s.status[0].toUpperCase()+s.status.slice(1))),sel,cm,h('div',{className:'row'},rate('accepted'),rate('rejected')),w)))});
+  }else{
+    const acc=subs.filter(s=>s.status==='accepted'&&s.worker_id!==me.id);
+    if(acc.length){out.append(h('h2',{},'Accepted work'));acc.forEach(s=>out.append(card(s)))}
+    if(!closed){
+      if(!mine){const b=h('button',{className:'btn'},'Take this job');b.onclick=()=>act(b,()=>q(sb.from('claims').insert({task_id:id})));out.append(b)}
+      else{const f=h('input',{type:'file'}),n=h('textarea',{rows:2,placeholder:'Note for the poster (optional)'}),p=h('input',{type:'text',placeholder:'Where to send the bounty (PayPal email, wallet…)'}),b=h('button',{className:'btn'},'Send my work');
+        b.onclick=()=>act(b,async()=>{const u=await upload(f.files[0],true);const r=(await q(sb.from('submissions').insert({task_id:id,file_path:u.path,file_type:u.type,note:n.value.trim()||null}).select()))[0];
+          if(p.value.trim())await q(sb.from('payouts').insert({submission_id:r.id,details:p.value.trim()}))});
+        out.append(h('div',{className:'card'},h('h2',{},'Send your work'),f,n,p,b,h('div',{className:'note'},'Other workers cannot see your work unless the poster accepts it. You can send again.')))}
+    }
+    const my=subs.filter(s=>s.worker_id===me.id);
+    if(my.length){out.append(h('h2',{},'My submissions'));my.forEach(s=>out.append(card(s,h('p',{},h('b',{className:s.status==='accepted'?'ok':s.status==='rejected'?'bad':''},s.status==='pending'?'Waiting for review':s.status[0].toUpperCase()+s.status.slice(1)),s.status!=='pending'?' · '+s.rating+'/10'+(s.comment?' · '+s.comment:''):''))))}
+  }
+  return out;
+}
+sb.auth.onAuthStateChange((_e,s)=>{me=s?s.user:null;route()});
+addEventListener('hashchange',route);
+sb.auth.getSession().then(({data})=>{me=data.session?data.session.user:null;route()});
+</script></body></html>
