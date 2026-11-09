@@ -127,7 +127,7 @@ async function taskView(id){
   }
   return out;
 }
-sb.auth.onAuthStateChange((_e,s)=>{me=s?s.user:null;route()});
+sb.auth.onAuthStateChange((_e,s)=>{const u=s?s.user:null,changed=(u&&u.id)!==(me&&me.id);me=u;if(changed)route()});
 addEventListener('hashchange',route);
 sb.auth.getSession().then(({data})=>{me=data.session?data.session.user:null;route()});
 </script></body></html>
