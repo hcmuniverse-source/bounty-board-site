@@ -29,6 +29,10 @@ img.ph{max-width:100%;height:auto;display:block;border:6px solid #fff;box-shadow
 a{color:var(--accent)}
 .bounty{border:2px dashed var(--accent);padding:8px 12px;margin:10px 0}
 .err{color:var(--bad);min-height:1.2em}
+.pick{border:2px dashed var(--rule);padding:10px;margin:6px 0 12px;background:var(--card)}
+.bar{height:12px;background:#0002;border:1px solid var(--rule);margin:8px 0}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+.pv{max-width:100%;max-height:220px;display:block;margin:6px 0;border:4px solid #fff;box-shadow:0 2px 6px #0004}
 </style><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
 <script src="config.js"></script></head><body>
 <div id="app"><h1>The Bounty Board</h1><p class="sub">Post a task, name your price, choose the best work</p><div id="v">Loading…</div></div>
@@ -49,15 +53,42 @@ function media(path,ct,alt){
     else box.append(h('a',{href:u,target:'_blank',rel:'noopener'},'Open the file'))});
   return box;
 }
-async function upload(f,req){
-  if(!f){if(req)throw Error('Please choose a file first.');return null}
-  if(f.size>MAXB)throw Error('That file is over 50 MB.');
-  const p=me.id+'/'+crypto.randomUUID()+'-'+f.name.replace(/[^\w.-]/g,'_');
-  await q(sb.storage.from(BK).upload(p,f,{contentType:f.type||'application/octet-stream'}));return{path:p,type:f.type};
+async function xhrUpload(f,onp){
+  const {data:{session}}=await sb.auth.getSession(); if(!session)throw Error('Please sign in again.');
+  const path=me.id+'/'+crypto.randomUUID()+'-'+f.name.replace(/[^\w.-]/g,'_');
+  await new Promise((ok,no)=>{const x=new XMLHttpRequest();
+    x.open('POST',SUPABASE_URL+'/storage/v1/object/'+BK+'/'+path.split('/').map(encodeURIComponent).join('/'));
+    x.setRequestHeader('Authorization','Bearer '+session.access_token);x.setRequestHeader('apikey',SUPABASE_ANON_KEY);x.setRequestHeader('x-upsert','false');
+    x.upload.onprogress=e=>{if(e.lengthComputable)onp(Math.min(99,Math.round(e.loaded/e.total*100)))};
+    x.onload=()=>{if(x.status<300)ok();else{let m=x.responseText;try{m=JSON.parse(m).message||m}catch(e){}no(Error(m||('HTTP '+x.status)))}};
+    x.onerror=()=>no(Error('Network error'));x.ontimeout=()=>no(Error('Timed out'));x.timeout=600000;
+    const fd=new FormData();fd.append('cacheControl','3600');fd.append('',f);x.send(fd)});
+  onp(100);return path;
 }
-async function act(btn,fn,stay){const o=btn.textContent;btn.disabled=true;btn.textContent='Working…';
-  try{await fn();err=''}catch(e){err=(e&&e.message)||'Something went wrong.'}
-  btn.disabled=false;btn.textContent=o;route()}
+function picker(){
+  const st={path:null,type:null,busy:false,failed:false};
+  const inp=h('input',{type:'file'}),info=h('div',{}),fill=h('i'),bar=h('div',{className:'bar',hidden:true},fill),msg=h('div',{className:'note'}),
+    rm=h('button',{className:'btn alt',type:'button',hidden:true},'Remove'),
+    box=h('div',{className:'pick'},inp,info,bar,msg,rm);
+  const say=(t,c)=>{msg.textContent=t;msg.className=c||'note'};
+  const setP=n=>{fill.style.width=n+'%';say(n<100?'Uploading… '+n+'%':'Finishing…')};
+  rm.onclick=()=>{st.path=st.type=null;st.failed=false;inp.value='';info.replaceChildren();bar.hidden=true;rm.hidden=true;say('')};
+  inp.onchange=async()=>{
+    const f=inp.files[0];if(!f)return;st.path=st.type=null;st.failed=false;info.replaceChildren();
+    if(f.size>MAXB){say('That file is over 50 MB.','err');st.failed=true;return}
+    if((f.type||'').startsWith('image/'))info.append(h('img',{className:'pv',src:URL.createObjectURL(f),alt:'Preview'}));
+    info.append(h('div',{},f.name+' · '+(f.size/1048576).toFixed(1)+' MB'));
+    st.busy=true;bar.hidden=false;rm.hidden=true;setP(0);
+    try{st.path=await xhrUpload(f,setP);st.type=f.type||'application/octet-stream';fill.style.width='100%';say('Uploaded ✓','note ok')}
+    catch(e){st.failed=true;say('Upload failed: '+((e&&e.message)||'unknown error')+'. Choose the file again.','err')}
+    st.busy=false;rm.hidden=false;
+  };
+  return{el:box,st,ready(){if(st.busy)throw Error('Please wait for the upload to finish.');if(st.failed)throw Error('The file did not upload. Choose it again or tap Remove.');return st.path?{path:st.path,type:st.type}:null}};
+}
+async function act(btn,fn){const o=btn.textContent;btn.disabled=true;btn.textContent='Working…';let ok=true;
+  try{await fn();err=''}catch(e){ok=false;err=(e&&e.message)||'Something went wrong.'}
+  btn.disabled=false;btn.textContent=o;
+  if(ok)route();else{let e=document.getElementById('toperr');if(!e){e=h('p',{className:'err',id:'toperr'});$v.prepend(e)}e.textContent=err;window.scrollTo({top:0,behavior:'smooth'})}}
 function loginView(){
   const em=h('input',{type:'text',placeholder:'Email',autocomplete:'username'}),pw=h('input',{type:'password',placeholder:'Password',autocomplete:'current-password'});
   const b=h('button',{className:'btn'},'Sign in');
@@ -73,7 +104,7 @@ async function route(){
     const hs=location.hash;$v.replaceChildren(h('p',{className:'note'},'Signed in as '+nm(me.id)+' ('+({poster:'poster',worker:'worker',both:'poster and worker'}[role]||'worker')+') · ',h('a',{href:'#',onclick:async e=>{e.preventDefault();await sb.auth.signOut()}},'Sign out')));
     $v.append(hs==='#new'&&canPost?newView():hs.startsWith('#task-')?await taskView(hs.slice(6)):await listView());
   }catch(e){err=e.message||'Could not load.'}
-  if(err)$v.prepend(h('p',{className:'err'},err));
+  if(err)$v.prepend(h('p',{className:'err',id:'toperr'},err));
 }
 async function listView(){
   const ts=await q(sb.from('tasks').select('*').order('created_at',{ascending:false})),cs=await q(sb.from('claims').select('task_id'));
@@ -84,13 +115,13 @@ async function listView(){
         t.bounty_amount?h('p',{},'Bounty: '+t.bounty_amount+' ('+t.bounty_method+')'):null,h('p',{className:'note'},'Posted by '+nm(t.poster_id))))}):h('p',{className:'card'},'No tasks yet.'));
 }
 function newView(){
-  const title=h('input',{type:'text',placeholder:'What needs doing?'}),file=h('input',{type:'file'}),want=h('textarea',{rows:4,placeholder:'Describe what you expect.'}),
+  const title=h('input',{type:'text',placeholder:'What needs doing?'}),file=picker(),want=h('textarea',{rows:4,placeholder:'Describe what you expect.'}),
    amt=h('input',{type:'text',placeholder:'Optional, e.g. $20'}),meth=h('select',{},['PayPal','Stripe','Crypto','Other'].map(x=>h('option',{},x))),pn=h('input',{type:'text',placeholder:'How you will pay'});
   const b=h('button',{className:'btn'},'Post this task');
-  b.onclick=()=>act(b,async()=>{if(!title.value.trim())throw Error('Please add a title.');const u=await upload(file.files[0],false);
+  b.onclick=()=>act(b,async()=>{if(!title.value.trim())throw Error('Please add a title.');const u=file.ready();
     await q(sb.from('tasks').insert({title:title.value.trim(),description:want.value.trim(),file_path:u&&u.path,file_type:u&&u.type,
       bounty_amount:amt.value.trim()||null,bounty_method:amt.value.trim()?meth.value:null,bounty_note:pn.value.trim()||null}));location.hash=''});
-  return h('div',{className:'card'},h('h2',{},'New task'),h('label',{},'Title'),title,h('label',{},'Reference file (optional, up to 50 MB)'),file,h('label',{},'What I expect'),want,
+  return h('div',{className:'card'},h('h2',{},'New task'),h('label',{},'Title'),title,h('label',{},'Reference file (optional, up to 50 MB)'),file.el,h('label',{},'What I expect'),want,
     h('label',{},'Bounty (optional)'),amt,h('label',{},'Pay by'),meth,h('label',{},'Payment note'),pn,h('div',{className:'row'},b,h('a',{href:'#'},h('button',{className:'btn alt'},'Cancel'))));
 }
 async function taskView(id){
@@ -117,10 +148,10 @@ async function taskView(id){
     if(!closed&&!canWork)out.append(h('p',{className:'note'},'Only workers can take jobs.'));
     if(!closed&&canWork){
       if(!mine){const b=h('button',{className:'btn'},'Take this job');b.onclick=()=>act(b,()=>q(sb.from('claims').insert({task_id:id})));out.append(b)}
-      else{const f=h('input',{type:'file'}),n=h('textarea',{rows:2,placeholder:'Note for the poster (optional)'}),p=h('input',{type:'text',placeholder:'Where to send the bounty (PayPal email, wallet…)'}),b=h('button',{className:'btn'},'Send my work');
-        b.onclick=()=>act(b,async()=>{const u=await upload(f.files[0],true);const r=(await q(sb.from('submissions').insert({task_id:id,file_path:u.path,file_type:u.type,note:n.value.trim()||null}).select()))[0];
+      else{const f=picker(),n=h('textarea',{rows:2,placeholder:'Note for the poster (optional)'}),p=h('input',{type:'text',placeholder:'Where to send the bounty (PayPal email, wallet…)'}),b=h('button',{className:'btn'},'Send my work');
+        b.onclick=()=>act(b,async()=>{const u=f.ready();if(!u)throw Error('Please choose a file first.');const r=(await q(sb.from('submissions').insert({task_id:id,file_path:u.path,file_type:u.type,note:n.value.trim()||null}).select()))[0];
           if(p.value.trim())await q(sb.from('payouts').insert({submission_id:r.id,details:p.value.trim()}))});
-        out.append(h('div',{className:'card'},h('h2',{},'Send your work'),f,n,p,b,h('div',{className:'note'},'Other workers cannot see your work unless the poster accepts it. You can send again.')))}
+        out.append(h('div',{className:'card'},h('h2',{},'Send your work'),f.el,n,p,b,h('div',{className:'note'},'Other workers cannot see your work unless the poster accepts it. You can send again.')))}
     }
     const my=subs.filter(s=>s.worker_id===me.id);
     if(my.length){out.append(h('h2',{},'My submissions'));my.forEach(s=>out.append(card(s,h('p',{},h('b',{className:s.status==='accepted'?'ok':s.status==='rejected'?'bad':''},s.status==='pending'?'Waiting for review':s.status[0].toUpperCase()+s.status.slice(1)),s.status!=='pending'?' · '+s.rating+'/10'+(s.comment?' · '+s.comment:''):''))))}
